@@ -1,12 +1,12 @@
 from flask import Flask
 from .database import init_app, create_tables
-
+import os
 
 def create_app():
     app = Flask(__name__)
 
     app.config["TESTING"] = False
-    app.config["DATABASE"] = "dance_studio.db"
+    app.config["DATABASE"] = os.environ.get("DATABASE", "dance_studio.db")
 
     init_app(app)
 

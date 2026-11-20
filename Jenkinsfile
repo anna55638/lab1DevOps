@@ -1,8 +1,11 @@
 pipeline {
     agent any
 
-   environment {
-    PYTHON = 'C:\\Users\\user\\AppData\\Local\\Python\\bin\\python.exe'
+    environment {
+        APP_IMAGE   = 'dance-studio-app'
+        NGINX_IMAGE = 'dance-studio-nginx'
+        // уникальный тег образа для каждой сборки: например main-12, dev-5
+        TAG = "${env.BRANCH_NAME}-${env.BUILD_NUMBER}"
     }
 
     stages {
@@ -13,84 +16,82 @@ pipeline {
             }
         }
 
-        // установка зависимостей
-        stage('Install Dependencies') {
+        // проверка, что Jenkins видит Docker
+        stage('Docker Info') {
             steps {
-                bat '"%PYTHON%" -m pip install -r requirements.txt'
+                bat 'docker version'
+                bat 'docker compose version'
             }
         }
 
-        // запуск тестов
+        // сборка двух образов: приложения и веб-сервера nginx
+        stage('Build Images') {
+            steps {
+                bat 'docker build -t %APP_IMAGE%:%TAG% .'
+                bat 'docker build -t %NGINX_IMAGE%:%TAG% nginx'
+            }
+        }
+
+        // автотесты запускаются ВНУТРИ собранного образа приложения
         stage('Tests') {
             steps {
-                bat '"%PYTHON%" -m pytest -v'
+                bat 'docker run --rm %APP_IMAGE%:%TAG% python -m pytest -v'
             }
         }
 
-        // остановка предыдущей версии: задача планировщика Windows и процесс на порту 5000; только для main
+        // проверка синтаксиса конфигурации nginx
+        stage('Nginx Config Test') {
+            steps {
+                bat 'docker run --rm --add-host app:127.0.0.1 %NGINX_IMAGE%:%TAG% nginx -t'
+            }
+        }
+
+        // остановка версии из ЛР1 (задача планировщика), чтобы она не мешала; только для main
         stage('Stop Old Version') {
             when { branch 'main' }
             steps {
                 powershell '''
                     Stop-ScheduledTask -TaskName 'LibraryApp' -ErrorAction SilentlyContinue
-                    Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+                    Unregister-ScheduledTask -TaskName 'LibraryApp' -Confirm:$false -ErrorAction SilentlyContinue
                     exit 0
                 '''
             }
         }
 
-        // доставка: копирование проверенной версии в C:\deploy\library; только для main
-        stage('Copy Application') {
+        // развёртывание: проверенные образы помечаются как latest и запускаются через docker compose; только для main
+        stage('Deploy') {
             when { branch 'main' }
             steps {
-                bat '''
-                    robocopy . C:\\deploy\\library /E /XD .git .pytest_cache __pycache__ /NFL /NDL /NJH /NJS /NP
-                    if %ERRORLEVEL% LSS 8 exit /b 0
-                    exit /b 1
-                '''
-                bat '"%PYTHON%" -m pip install -r C:/deploy/library/requirements.txt'
+                bat 'docker tag %APP_IMAGE%:%TAG% %APP_IMAGE%:latest'
+                bat 'docker tag %NGINX_IMAGE%:%TAG% %NGINX_IMAGE%:latest'
+                bat 'docker compose up -d --no-build --remove-orphans'
             }
         }
 
-        // запуск приложения ОТДЕЛЬНО от Jenkins: через планировщик задач Windows.
-        // Jenkins только создаёт задачу и даёт команду "запустить", после чего сборка завершается,
-        // а приложение работает как самостоятельный процесс.
-        stage('Start Application') {
-            when { branch 'main' }
-            steps {
-                powershell '''
-                    $Arg = '/c ""' + $env:PYTHON + '" -m flask --app app run --host 127.0.0.1 --port 5000 > C:\\deploy\\library\\app.log 2>&1"'
-                    $Action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument $Arg -WorkingDirectory 'C:\\deploy\\library'
-                    $Principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-                    $Settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-                    Register-ScheduledTask -TaskName 'LibraryApp' -Action $Action -Principal $Principal -Settings $Settings -Force | Out-Null
-                    Start-ScheduledTask -TaskName 'LibraryApp'
-                    exit 0
-                '''
-            }
-        }
-
-        // проверка, что приложение отвечает на этом компьютере
+        // проверка, что приложение отвечает через nginx на порту 80
         stage('Health Check') {
             when { branch 'main' }
             steps {
                 retry(10) {
-                    sleep time: 2, unit: 'SECONDS'
-                    bat 'curl.exe -fsS http://127.0.0.1:5000/health'
+                    sleep time: 3, unit: 'SECONDS'
+                    bat 'curl.exe -fsS http://localhost/health'
                 }
-                echo 'Application deployed and running: http://127.0.0.1:5000'
+                bat 'docker compose ps'
+                echo 'Application deployed in Docker: http://localhost'
             }
         }
     }
 
     post {
-        success {
-            echo 'CI pipeline completed successfully!'
+        always {
+            // удаляем временные теги сборки, чтобы не копить образы (latest остаётся)
+            bat(script: 'docker rmi %APP_IMAGE%:%TAG% %NGINX_IMAGE%:%TAG%', returnStatus: true)
         }
-
+        success {
+            echo 'CI/CD pipeline completed successfully!'
+        }
         failure {
-            echo 'CI pipeline failed!'
+            echo 'CI/CD pipeline failed!'
         }
     }
 }
-
