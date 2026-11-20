@@ -1,0 +1,36 @@
+name: dance-studio
+
+services:
+  # микросервис 1: Flask-приложение (API + интерфейс)
+  app:
+    build: .
+    image: dance-studio-app:latest
+    restart: unless-stopped
+    expose:
+      - "5000"            # порт виден только внутри сети, наружу не публикуется
+    volumes:
+      - dance-data:/app/instance   # база SQLite переживает пересоздание контейнера
+    environment:
+      - DATABASE=/app/instance/dance_studio.db   # путь к базе внутри тома
+    networks:
+      - backend
+
+  # микросервис 2: веб-сервер nginx (reverse proxy)
+  nginx:
+    build: ./nginx
+    image: dance-studio-nginx:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"           # порт_компьютера:порт_контейнера
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  dance-data:

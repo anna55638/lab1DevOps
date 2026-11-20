@@ -1,6 +1,6 @@
-# Студия танцев — CI/CD
+# Студия танцев — CI/CD + Docker
 
-Адаптация исходного Flask-проекта библиотеки под управление танцевальной студией. Сохранены структура, интерфейс, CRUD API, pytest и Jenkins Pipeline.
+Flask-приложение для управления танцевальной студией. ЛР1: CRUD API, pytest, Jenkins Pipeline. ЛР2: контейнеризация (Docker), веб-сервер nginx, микросервисная архитектура.
 
 ## Сущности
 - `classes` — занятия (`title`, `instructor_id`, `style_id`, `studio_id`, `duration` в минутах)
@@ -10,10 +10,24 @@
 
 Для каждой сущности доступны POST, GET списка, GET по ID, PUT, DELETE. Всего 20 CRUD-операций.
 
-## Запуск в Windows (PowerShell)
-1. Установите Python с включённым **Add python.exe to PATH**.
-2. Откройте PowerShell в папке проекта и выполните:
+## Архитектура (ЛР2)
+```
+Браузер ──:80──> [ nginx ] ──сеть backend──> [ app: gunicorn + Flask :5000 ] ──> том dance-data (SQLite)
+```
+- `app` — образ из `Dockerfile` (Python 3.12, gunicorn), порт 5000 наружу не открыт
+- `nginx` — образ из `nginx/Dockerfile`, reverse proxy, порт 80
+- `docker-compose.yml` — описывает оба сервиса, сеть `backend` и том `dance-data`
 
+## Запуск в Docker
+```powershell
+docker compose up -d --build
+docker compose ps
+curl.exe http://localhost/health
+```
+Сайт: http://localhost  
+Остановка: `docker compose down` (данные в томе сохраняются; `docker compose down -v` удалит и их).
+
+## Запуск без Docker (как в ЛР1)
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
@@ -21,11 +35,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe run.py
 ```
 
-Сайт: http://127.0.0.1:5000
-
-## Jenkins на Windows
-Jenkinsfile оставлен как в исходнике, **кроме** строки `PYTHON = 'python'`. Python должен находиться в PATH **учётной записи службы Jenkins**. Проверьте это в Jenkins Pipeline командой `bat 'where python'` или в системе. Если служба не видит Python, добавьте путь к папке Python в системную PATH и перезапустите службу Jenkins.
-
-**Важно:** в соответствии с просьбой сохранить Jenkinsfile, исходные имена `LibraryApp` и путь `C:\deploy\library` в этапах развёртывания НЕ изменены. Это только внутренние имена задачи и каталога; приложение при этом танцевальное. Jenkins разворачивает приложение только из ветки `main`, используя Windows Task Scheduler, и требует права на регистрацию задач. На Windows Jenkins Agent должны быть доступны `python`, `powershell`, `robocopy`, `curl.exe`.
+## Jenkins
+Multibranch Pipeline. На всех ветках: сборка образов, pytest внутри контейнера, проверка конфига nginx (`nginx -t`). Только на `main`: развёртывание через `docker compose up -d` и Health Check `http://localhost/health`.  
+Служба Jenkins должна иметь доступ к Docker Desktop (запуск службы от учётной записи пользователя, состоящего в группе `docker-users`).
 
 Не добавляйте `.venv`, `.git` и локальные файлы БД в Git-репозиторий.
