@@ -1,10 +1,10 @@
 :root {
-  --accent: #44abdb;
+  --accent: #e11e6f;
   --paper: #f4f6f3;
   --ink: #1d2a2e;
   --line: #d5dbd6;
   --bad: #b3261e;
-}
+}gi
 
 * { box-sizing: border-box; }
 
